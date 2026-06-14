@@ -333,7 +333,8 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
           <thead><tr><th style="width:34px"><input type="checkbox" id="hist-all" style="width:17px;height:17px;accent-color:var(--petrol)"></th><th>Data</th><th>Placa</th><th>Veículo</th><th>Horário</th><th>Fotos</th><th>Observação</th></tr></thead>
           <tbody id="hist-body"></tbody>
         </table>
-      </div>
+            <div class="paginacao" id="hist-paginacao"></div>
+</div>
     </div>
   </section>
 </main>
@@ -350,6 +351,11 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
     </div>
     <div class="cal-grid" id="cal-grid"></div>
     <p class="hint" id="cal-resumo" style="margin-top:10px"></p>
+    <div class="cal-legenda">
+      <span><span class="dot" style="background:var(--petrol)"></span>Programado</span>
+      <span><span class="dot" style="background:var(--done-bg);border:1.5px solid var(--done-line)"></span>Já lavado</span>
+      <span><span class="dot" style="border:2px solid var(--aqua)"></span>Hoje</span>
+    </div>
     <div style="display:flex;gap:10px;margin-top:6px">
       <button class="btn ghost" style="flex:1" id="cal-cancelar">Cancelar</button>
       <button class="btn primary" style="flex:2" id="cal-salvar">✓ Programar</button>
@@ -417,7 +423,7 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
       <select id="vei-ativo"><option value="1">Ativo</option><option value="0">Inativo</option></select>
     </div>
     <p id="vei-excluir" style="display:none;text-align:center;margin:4px 0 10px">
-      <a href="#" onclick="excluirVeiculoModal();return false" style="font-size:12px;color:var(--muted);text-decoration:underline">Excluir veículo permanentemente</a>
+      <a href="#" id="vei-excluir-link" style="font-size:12px;color:var(--muted);text-decoration:underline">Excluir veículo permanentemente</a>
     </p>
     <div style="display:flex;gap:10px;margin-top:6px">
       <button class="btn ghost" style="flex:1" id="vei-cancelar">Cancelar</button>
@@ -440,11 +446,29 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
 </div>
 
 <div id="toast"></div>
+
+<!-- Modal: senha de administração -->
+<div class="overlay" id="ov-senha">
+  <div class="modal" style="max-width:360px">
+    <h3>🔒 Área restrita</h3>
+    <p class="sub">Digite a senha para acessar a administração.</p>
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="senha-input" placeholder="••••••••••••" autocomplete="current-password">
+    </div>
+    <div id="senha-erro">⚠️ Senha incorreta. Tente novamente.</div>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button class="btn ghost" style="flex:1" id="senha-cancelar">Cancelar</button>
+      <button class="btn primary" style="flex:2" id="senha-confirmar">Entrar</button>
+    </div>
+  </div>
+</div>
 <div id="lightbox"><img id="lightbox-img" alt="Foto da lavagem"></div>
 
 <!-- Tela de conexão com o banco -->
 <div id="conn" style="position:fixed;inset:0;background:var(--paper);z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center">
   <div class="drop" style="width:54px;height:54px;border-radius:50% 50% 50% 6px;background:var(--aqua);transform:rotate(-45deg);display:flex;align-items:center;justify-content:center"><span style="transform:rotate(45deg);font-size:26px">🚛</span></div>
+  <div class="spinner" id="conn-spinner"></div>
   <b id="conn-msg" style="font-size:15px;color:var(--petrol)">Conectando ao banco de dados…</b>
   <button class="btn primary" id="conn-retry" style="display:none">Tentar novamente</button>
 </div>
@@ -491,6 +515,7 @@ async function carregarTudo() {
   S.programacao = {};
   p.data.forEach(r => { (S.programacao[r.data] = S.programacao[r.data] || []).push(r.placa); });
   S.lavagens = l.data;
+  invalidarCacheDias();
 }
 
 function renderTudo() {
@@ -522,15 +547,26 @@ function lavagemDoDia(placa, data) {
   return S.lavagens.find(l => l.placa === placa && l.data === data);
 }
 
+/* Cache de dias por placa — invalidado a cada carregarTudo() */
+let _cacheDias = null;
+function invalidarCacheDias() { _cacheDias = null; }
+
 /* Retorna quantos dias faz desde a última lavagem do veículo,
    ou null se não houver nenhum registro. */
 function diasDesdeUltimaLavagem(placa) {
-  const lavs = S.lavagens.filter(l => l.placa === placa);
-  if (!lavs.length) return null;
-  const ultima = lavs.reduce((a, b) => a.data > b.data ? a : b);
-  const hoje = hojeISO();
-  const ms = new Date(hoje) - new Date(ultima.data);
-  return Math.round(ms / 86400000);
+  if (!_cacheDias) {
+    const hoje = hojeISO();
+    _cacheDias = {};
+    const porPlaca = {};
+    S.lavagens.forEach(l => {
+      if (!porPlaca[l.placa] || l.data > porPlaca[l.placa]) porPlaca[l.placa] = l.data;
+    });
+    Object.keys(porPlaca).forEach(p => {
+      const ms = new Date(hoje) - new Date(porPlaca[p]);
+      _cacheDias[p] = Math.round(ms / 86400000);
+    });
+  }
+  return placa in _cacheDias ? _cacheDias[placa] : null;
 }
 
 /* Ordena lista de veículos do mais urgente (mais dias sem lavar)
@@ -547,17 +583,16 @@ function ordenarPorUrgencia(veiculos) {
 }
 
 /* ------------------------------------------------------------------
-   REPROGRAMAÇÃO DE PENDENTES — nova lógica (v2)
+   REPROGRAMAÇÃO DE PENDENTES — v3
    ------------------------------------------------------------------
    Regras:
    • Verifica APENAS o dia anterior (ontem).
-   • Filtra placas cuja reprogramação o usuário JÁ RECUSOU
-     (lista gravada no localStorage como JSON: { placa: dataOntem }).
-     A recusa vale APENAS para aquela data específica — se a placa
-     for programada novamente e ficar sem lavagem, pergunta de novo.
+   • Recusas ficam na tabela reprog_recusadas no Supabase,
+     sincronizando entre qualquer dispositivo.
+     A recusa vale APENAS para aquela data específica.
    • Se houver pendentes elegíveis, exibe modal de confirmação UMA VEZ.
-   • SIM → insere no banco e limpa a lista de recusadas para ontem.
-   • NÃO → grava as placas como "recusadas para ontem" no localStorage.
+   • SIM → insere no banco.
+   • NÃO → grava as placas em reprog_recusadas no Supabase.
    ------------------------------------------------------------------ */
 
 function ontemISO() {
@@ -565,30 +600,29 @@ function ontemISO() {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
-/* Lê do localStorage quais placas foram recusadas para uma data */
-function recusadasPara(data) {
+/* Lê do Supabase quais placas foram recusadas para uma data */
+async function recusadasPara(data) {
   try {
-    const raw = localStorage.getItem('reprog_recusadas');
-    if (!raw) return new Set();
-    const obj = JSON.parse(raw);
-    return new Set(obj[data] || []);
-  } catch { return new Set(); }
+    const { data: rows, error } = await sb.from('reprog_recusadas').select('placa').eq('data', data);
+    if (error) throw error;
+    return new Set((rows || []).map(r => r.placa));
+  } catch (e) {
+    console.warn('recusadasPara:', e);
+    return new Set();
+  }
 }
 
-/* Grava placas recusadas para uma data no localStorage */
-function salvarRecusadas(data, placas) {
+/* Grava placas recusadas para uma data no Supabase */
+async function salvarRecusadas(data, placas) {
   try {
-    const raw = localStorage.getItem('reprog_recusadas');
-    const obj = raw ? JSON.parse(raw) : {};
-    // Limpa datas antigas (mantém só ontem e hoje para não acumular lixo)
-    const hoje = hojeISO();
-    const ontem = ontemISO();
-    const limpo = {};
-    if (obj[hoje]) limpo[hoje] = obj[hoje];
-    if (obj[ontem]) limpo[ontem] = obj[ontem];
-    limpo[data] = placas;
-    localStorage.setItem('reprog_recusadas', JSON.stringify(limpo));
-  } catch { /* localStorage indisponível — ignora */ }
+    await sb.from('reprog_recusadas').insert(placas.map(p => ({ data, placa: p })));
+    // Limpa recusadas com mais de 2 dias para não acumular
+    const corte = new Date(); corte.setDate(corte.getDate() - 2);
+    const corteISO = corte.getFullYear() + '-' + String(corte.getMonth()+1).padStart(2,'0') + '-' + String(corte.getDate()).padStart(2,'0');
+    await sb.from('reprog_recusadas').delete().lt('data', corteISO);
+  } catch (e) {
+    console.warn('salvarRecusadas:', e);
+  }
 }
 
 async function verificarPendentesOntem() {
@@ -598,7 +632,7 @@ async function verificarPendentesOntem() {
   if (!progOntem.length) return; // nada programado ontem
 
   const jaHoje = new Set(S.programacao[hoje] || []);
-  const recusadas = recusadasPara(ontem);
+  const recusadas = await recusadasPara(ontem);
   const ativos = new Set(S.veiculos.filter(v => v.ativo).map(v => v.placa));
 
   // Placas elegíveis: programadas ontem, não lavadas ontem,
@@ -643,10 +677,10 @@ async function verificarPendentesOntem() {
       resolve();
     };
 
-    document.getElementById('reprog-nao').onclick = () => {
+    document.getElementById('reprog-nao').onclick = async () => {
       document.getElementById('ov-reprog').classList.remove('on');
-      // Grava recusa no localStorage (por placa + data de ontem)
-      salvarRecusadas(ontem, elegiveis);
+      // Grava recusa no Supabase
+      await salvarRecusadas(ontem, elegiveis);
       resolve();
     };
   });
@@ -680,22 +714,29 @@ function tagDiasCompacta(placa) {
 }
 
 /* Comprime a foto antes de enviar (máx. 1200px, JPEG 70%) —
-   economiza internet do celular e espaço no Storage. */
+   economiza internet do celular e espaço no Storage.
+   Valida tipo (só imagem) e tamanho (máx 15MB). */
 function comprimirFoto(file) {
+  if (!file.type.startsWith('image/')) throw new Error('Arquivo não é uma imagem.');
+  if (file.size > 15 * 1024 * 1024) throw new Error('Imagem muito grande (máx. 15 MB).');
   return new Promise((resolve, reject) => {
     const img = new Image();
+    const url = URL.createObjectURL(file);
     img.onload = () => {
+      URL.revokeObjectURL(url);
       const MAX = 1200;
       let { width: w, height: h } = img;
       if (w > MAX || h > MAX) { const r = Math.min(MAX/w, MAX/h); w = Math.round(w*r); h = Math.round(h*r); }
       const cv = document.createElement('canvas');
       cv.width = w; cv.height = h;
       cv.getContext('2d').drawImage(img, 0, 0, w, h);
-      resolve({ nome: file.name || 'foto.jpg', dataUrl: cv.toDataURL('image/jpeg', .7) });
-      URL.revokeObjectURL(img.src);
+      cv.toBlob(blob => {
+        if (!blob) { reject(new Error('Falha ao comprimir imagem.')); return; }
+        resolve({ nome: file.name || 'foto.jpg', blob, dataUrl: URL.createObjectURL(blob) });
+      }, 'image/jpeg', 0.7);
     };
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não foi possível ler a imagem.')); };
+    img.src = url;
   });
 }
 
@@ -709,20 +750,72 @@ function adminLiberado() {
 function liberarAdmin() {
   try { sessionStorage.setItem('adminOk', '1'); } catch (e) { window._adminOk = true; }
 }
+
+function pedirSenha() {
+  return new Promise(resolve => {
+    const ov = document.getElementById('ov-senha');
+    const inp = document.getElementById('senha-input');
+    const erro = document.getElementById('senha-erro');
+    inp.value = ''; erro.style.display = 'none';
+    ov.classList.add('on');
+    setTimeout(() => inp.focus(), 120);
+    function tentar() {
+      if (inp.value === SENHA_ADMIN) {
+        ov.classList.remove('on'); liberarAdmin(); resolve(true);
+      } else {
+        erro.style.display = 'block'; inp.value = ''; inp.focus();
+      }
+    }
+    function cancelar() { ov.classList.remove('on'); resolve(false); }
+    document.getElementById('senha-confirmar').onclick = tentar;
+    document.getElementById('senha-cancelar').onclick = cancelar;
+    inp.onkeydown = e => { if (e.key === 'Enter') tentar(); if (e.key === 'Escape') cancelar(); };
+  });
+}
+
 document.querySelectorAll('nav.bottom button').forEach(b => {
-  b.onclick = () => {
+  b.onclick = async () => {
     if (b.dataset.view === 'admin' && !adminLiberado()) {
-      const senha = prompt('Senha da administração:');
-      if (senha === null) return;            // cancelou
-      if (senha !== SENHA_ADMIN) { toast('⚠️ Senha incorreta'); return; }
-      liberarAdmin();
+      const ok = await pedirSenha();
+      if (!ok) return;
     }
     document.querySelectorAll('nav.bottom button').forEach(x => x.classList.remove('on'));
     document.querySelectorAll('.view').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
     document.getElementById('view-' + b.dataset.view).classList.add('on');
-    sincronizar(); // sempre busca dados atualizados ao trocar de painel
+    sincronizar();
   };
+});
+
+/* Delegação de eventos — listas */
+document.getElementById('lista-lavador').addEventListener('click', e => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  if (btn.dataset.action === 'reportar') abrirLavagem(btn.dataset.placa);
+});
+document.getElementById('lista-admin').addEventListener('click', e => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  if (btn.dataset.action === 'editar') abrirVeiculo(btn.dataset.placa);
+});
+document.getElementById('prog-lista').addEventListener('click', e => {
+  const card = e.target.closest('[data-action]');
+  if (!card) return;
+  if (card.dataset.action === 'calendario') abrirCalendario(card.dataset.placa);
+});
+document.getElementById('cal-grid').addEventListener('click', e => {
+  const btn = e.target.closest('[data-dia]');
+  if (!btn) return;
+  toggleDia(btn.dataset.dia);
+});
+document.getElementById('hist-body').addEventListener('click', e => {
+  const img = e.target.closest('.mini');
+  if (img) { verFoto(img.dataset.url || img.src); return; }
+  if (e.target.classList.contains('hist-chk')) atualizarSelecaoHist();
+});
+document.querySelector('.foto-slots').addEventListener('click', e => {
+  const btn = e.target.closest('[data-action="remover-foto"]');
+  if (btn) removerFoto(btn.dataset.slot);
 });
 document.querySelectorAll('.subtabs button').forEach(b => {
   b.onclick = () => {
@@ -778,7 +871,7 @@ function renderLavador() {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:7px">
         <span class="chip ${status}"><span class="dot"></span>${lav ? 'Lavado' : 'Pendente'}</span>
-        <button class="btn aqua small" onclick="abrirLavagem('${v.placa}')">🧽 Reportar</button>
+        <button class="btn aqua small" data-action="reportar" data-placa="${v.placa}">🧽 Reportar</button>
       </div>
     </div>`;
   }).join('');
@@ -821,7 +914,7 @@ document.querySelectorAll('.foto-slot input[type=file]').forEach(inp => {
       foto.nome = SLOT_NOMES[slot];
       fotosAtuais[slot] = foto;
       renderThumbs();
-    } catch (err) { toast('Não foi possível ler a imagem'); }
+    } catch (err) { toast('⚠️ ' + (err.message || 'Não foi possível ler a imagem')); }
   };
 });
 
@@ -832,7 +925,7 @@ function renderThumbs() {
     if (fotosAtuais[slot]) {
       el.classList.add('tem');
       prev.innerHTML = `<img src="${fotosAtuais[slot].dataUrl}" alt="${SLOT_NOMES[slot]}">
-        <button onclick="removerFoto('${slot}')" title="Remover">✕</button>`;
+        <button data-action="remover-foto" data-slot="${slot}" title="Remover">✕</button>`;
     } else {
       el.classList.remove('tem');
       prev.innerHTML = '';
@@ -847,7 +940,11 @@ function renderThumbs() {
     : `⚠️ Anexe as 3 fotos obrigatórias para confirmar (${n}/3 anexada${n !== 1 ? 's' : ''}).`;
   document.getElementById('lav-salvar').disabled = !completo;
 }
-function removerFoto(slot) { delete fotosAtuais[slot]; renderThumbs(); }
+function removerFoto(slot) {
+  if (fotosAtuais[slot]?.dataUrl) URL.revokeObjectURL(fotosAtuais[slot].dataUrl);
+  delete fotosAtuais[slot];
+  renderThumbs();
+}
 
 /* Salvar lavagem: envia as fotos para o Storage e grava o registro */
 document.getElementById('lav-salvar').onclick = async () => {
@@ -860,9 +957,8 @@ document.getElementById('lav-salvar').onclick = async () => {
     const fotos = [];
     for (let i = 0; i < slots.length; i++) {
       const f = fotosAtuais[slots[i]];
-      const blob = await (await fetch(f.dataUrl)).blob();
       const caminho = `${placaAtual}/${data}/${Date.now()}_${slots[i]}.jpg`;
-      const up = await sb.storage.from('fotos').upload(caminho, blob, { contentType: 'image/jpeg' });
+      const up = await sb.storage.from('fotos').upload(caminho, f.blob, { contentType: 'image/jpeg' });
       if (up.error) throw up.error;
       const { data: pub } = sb.storage.from('fotos').getPublicUrl(caminho);
       fotos.push({ nome: f.nome, url: pub.publicUrl });
@@ -891,6 +987,7 @@ let placaEditando = null;
 document.getElementById('busca-admin').addEventListener('input', renderAdminVeiculos);
 document.getElementById('btn-novo-veiculo').onclick = () => abrirVeiculo(null);
 document.getElementById('vei-cancelar').onclick = () => document.getElementById('ov-veiculo').classList.remove('on');
+document.getElementById('vei-excluir-link').addEventListener('click', e => { e.preventDefault(); excluirVeiculoModal(); });
 
 function renderAdminVeiculos() {
   const filtro = document.getElementById('busca-admin').value.trim().toUpperCase();
@@ -909,7 +1006,7 @@ function renderAdminVeiculos() {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:7px">
         <span class="${v.ativo ? 'tag-active' : 'tag-inactive'}">${v.ativo ? 'Ativo' : 'Inativo'}</span>
         <div class="row-actions">
-          <button class="btn ghost small" onclick="abrirVeiculo('${v.placa}')">✏️</button>
+          <button class="btn ghost small" data-action="editar" data-placa="${v.placa}">✏️</button>
         </div>
       </div>
     </div>`).join('') || '<div class="empty"><div class="big">🔍</div>Nenhum veículo encontrado.</div>';
@@ -987,7 +1084,7 @@ function renderProgramacao() {
       const [a, m, dd] = d.split('-');
       return `<span class="data-chip">${dd}/${m}</span>`;
     }).join('') + (datas.length > 3 ? `<span class="data-chip">+${datas.length - 3}</span>` : '');
-    return `<button type="button" class="prog-card" onclick="abrirCalendario('${esc(v.placa)}')">
+    return `<button type="button" class="prog-card" data-action="calendario" data-placa="${esc(v.placa)}">
       <b>${esc(v.placa)}</b>
       <small style="color:var(--muted)">${esc(v.modelo)}</small>
       ${tagDiasCompacta(v.placa)}
@@ -1029,8 +1126,9 @@ function renderCalendario() {
   for (let d = 1; d <= diasNoMes; d++) {
     const iso = calAno + '-' + String(calMes+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
     const passado = iso < hoje;
-    const cls = ['dia', calMarcadas.has(iso) ? 'marcado' : '', iso === hoje ? 'hoje' : ''].join(' ');
-    h += `<button type="button" class="${cls}" ${passado ? 'disabled' : ''} onclick="toggleDia('${iso}')">${d}</button>`;
+    const lavadoNoDia = !!lavagemDoDia(calPlaca, iso);
+    const cls2 = ['dia', calMarcadas.has(iso) ? 'marcado' : '', iso === hoje ? 'hoje' : '', lavadoNoDia ? 'lavado' : ''].filter(Boolean).join(' ');
+    h += `<button type="button" class="${cls2}" ${passado ? 'disabled' : ''} data-dia="${iso}">${d}</button>`;
   }
   document.getElementById('cal-grid').innerHTML = h;
   atualizarResumoCal();
@@ -1079,27 +1177,35 @@ document.getElementById('cal-salvar').onclick = async () => {
 /* ==================================================================
    ADMIN — HISTÓRICO DE LAVAGENS
    ================================================================== */
+const HIST_POR_PAG = 50;
+let histPagAtual = 1;
+let histFiltradas = [];
+
 ['f-de','f-ate','f-placa'].forEach(id =>
-  document.getElementById(id).addEventListener('input', renderHistorico));
+  document.getElementById(id).addEventListener('input', () => { histPagAtual = 1; renderHistorico(); }));
 
 function renderHistorico() {
   const de = document.getElementById('f-de').value;
   const ate = document.getElementById('f-ate').value;
   const fp = document.getElementById('f-placa').value.trim().toUpperCase();
 
-  // Só lavagens concluídas (linhas "pendente" não aparecem mais)
-  const filtradas = S.lavagens.filter(l =>
+  histFiltradas = S.lavagens.filter(l =>
     (!de || l.data >= de) && (!ate || l.data <= ate) &&
     (!fp || l.placa.includes(fp))
   ).sort((a,b) => (b.data + (b.hora||'')).localeCompare(a.data + (a.hora||'')));
 
-  document.getElementById('hist-body').innerHTML = filtradas.map(l => {
+  const totalPags = Math.max(1, Math.ceil(histFiltradas.length / HIST_POR_PAG));
+  if (histPagAtual > totalPags) histPagAtual = totalPags;
+  const inicio = (histPagAtual - 1) * HIST_POR_PAG;
+  const pagina = histFiltradas.slice(inicio, inicio + HIST_POR_PAG);
+
+  document.getElementById('hist-body').innerHTML = pagina.map(l => {
     const v = S.veiculos.find(x => x.placa === l.placa);
     const fotos = l.fotos && l.fotos.length
-      ? l.fotos.map(f => `<img class="mini" src="${esc(f.url)}" alt="foto" loading="lazy" onclick="verFoto('${esc(f.url)}')">`).join('')
+      ? l.fotos.map(f => `<img class="mini" src="${esc(f.url)}" alt="foto" loading="lazy" data-url="${esc(f.url)}">`).join('')
       : '<span style="color:var(--muted)">—</span>';
     return `<tr>
-      <td><input type="checkbox" class="hist-chk" data-id="${l.id}" onchange="atualizarSelecaoHist()" style="width:17px;height:17px;accent-color:var(--petrol)"></td>
+      <td><input type="checkbox" class="hist-chk" data-id="${l.id}" style="width:17px;height:17px;accent-color:var(--petrol)"></td>
       <td>${brData(l.data)}</td>
       <td><b>${esc(l.placa)}</b></td>
       <td>${v ? esc(v.modelo) : '—'}</td>
@@ -1111,6 +1217,16 @@ function renderHistorico() {
 
   document.getElementById('hist-all').checked = false;
   atualizarSelecaoHist();
+
+  const pag = document.getElementById('hist-paginacao');
+  if (!pag) return;
+  if (totalPags <= 1) { pag.innerHTML = ''; }
+  else {
+    const info = `<span class="pag-info">${histFiltradas.length} registros · pág. ${histPagAtual}/${totalPags}</span>`;
+    const prev = `<button ${histPagAtual === 1 ? 'disabled' : ''} data-pag="${histPagAtual - 1}">‹ Anterior</button>`;
+    const next = `<button ${histPagAtual === totalPags ? 'disabled' : ''} data-pag="${histPagAtual + 1}">Próxima ›</button>`;
+    pag.innerHTML = prev + info + next;
+  }
 }
 
 /* ---------- seleção e exclusão de registros ---------- */
@@ -1158,6 +1274,15 @@ document.getElementById('btn-apagar-sel').onclick = async () => {
   }
 };
 
+/* ---------- paginação do histórico ---------- */
+document.getElementById('hist-paginacao').addEventListener('click', e => {
+  const btn = e.target.closest('[data-pag]');
+  if (!btn || btn.disabled) return;
+  histPagAtual = parseInt(btn.dataset.pag);
+  renderHistorico();
+  document.getElementById('sub-historico').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
 /* ---------- lightbox de fotos ---------- */
 function verFoto(url) {
   document.getElementById('lightbox-img').src = url;
@@ -1174,8 +1299,10 @@ document.getElementById('hdr-date').textContent =
 async function iniciar() {
   const msg = document.getElementById('conn-msg');
   const retry = document.getElementById('conn-retry');
+  const spinner = document.getElementById('conn-spinner');
   msg.textContent = 'Conectando ao banco de dados…';
   retry.style.display = 'none';
+  spinner.style.display = 'block';
   try {
     await carregarTudo();
     renderTudo();
@@ -1185,6 +1312,7 @@ async function iniciar() {
     try { await verificarPendentesOntem(); } catch(e) { console.warn('verificarPendentesOntem:', e); }
   } catch (e) {
     console.error('Erro de conexão:', e);
+    spinner.style.display = 'none';
     const detalhe = e?.message || e?.code || JSON.stringify(e) || '';
     msg.innerHTML = 'Não foi possível conectar ao banco.<br><small style="font-weight:400;opacity:.8">' + detalhe + '</small>';
     retry.style.display = 'inline-flex';
