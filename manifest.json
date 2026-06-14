@@ -1,0 +1,25 @@
+{
+  "name": "App Lavagem",
+  "short_name": "App Lavagem",
+  "description": "Controle de lavagem da frota",
+  "start_url": "/App-Lavagem-Sost/",
+  "scope": "/App-Lavagem-Sost/",
+  "display": "standalone",
+  "background_color": "#f4f8fa",
+  "theme_color": "#0e4d64",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

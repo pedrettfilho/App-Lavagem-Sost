@@ -2,6 +2,12 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="App Lavagem">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0e4d64">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Lavagem da Frota</title>
 <style>
@@ -1320,6 +1326,15 @@ async function iniciar() {
 }
 document.getElementById('conn-retry').onclick = iniciar;
 iniciar();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js')
+      .then(() => console.log('SW registrado'))
+      .catch(e => console.warn('SW falhou:', e));
+  });
+}
 </script>
 </body>
 </html>
