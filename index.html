@@ -2,12 +2,6 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<link rel="manifest" href="manifest.json">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="App Lavagem">
-<link rel="apple-touch-icon" href="icon-192.png">
-<meta name="theme-color" content="#0e4d64">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Lavagem da Frota</title>
 <style>
@@ -177,6 +171,7 @@ h2.sec{font-size:14px;text-transform:uppercase;letter-spacing:.8px;color:var(--m
 }
 .cal-grid .dia:disabled{opacity:.3;cursor:not-allowed}
 .cal-grid .dia.marcado{background:var(--petrol);border-color:var(--petrol);color:#fff}
+.cal-grid .dia.lavado{background:var(--done-bg);border-color:var(--done-line);color:var(--done);text-decoration:line-through}
 .cal-grid .dia.hoje{border-color:var(--aqua);border-width:2px}
 .cal-grid .vazio{border:0;background:none}
 .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
@@ -301,6 +296,7 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
       <button data-sub="veiculos" class="on">🚚 Veículos</button>
       <button data-sub="programacao">📅 Programação</button>
       <button data-sub="historico">📋 Histórico</button>
+      <button data-sub="lavadores">👷 Lavadores</button>
     </div>
 
     <!-- Cadastro de veículos -->
@@ -322,6 +318,12 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
         <input id="busca-prog" type="text" placeholder="Filtrar placa…" autocomplete="off">
       </div>
       <div class="sched-pick" id="prog-lista"></div>
+    </div>
+
+    <!-- Lavadores -->
+    <div id="sub-lavadores" class="subview" style="display:none">
+      <button class="btn primary block" id="btn-novo-lavador" style="margin-bottom:12px">＋ Adicionar lavador</button>
+      <div id="lista-lavadores"></div>
     </div>
 
     <!-- Histórico -->
@@ -382,6 +384,7 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
     <p class="sub" id="lav-sub"></p>
     <div class="field"><label>Placa</label><input id="lav-placa" readonly></div>
     <div class="field"><label>Data</label><input id="lav-data" readonly></div>
+    <div class="field"><label>Lavador *</label><select id="lav-lavador"><option value="">— selecione —</option></select></div>
     <div class="field"><label>Observação (opcional)</label><textarea id="lav-obs" placeholder="Ex.: lavagem completa com baú"></textarea></div>
     <div class="field">
       <label>Fotos da lavagem (direto da câmera)</label>
@@ -453,6 +456,22 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
 
 <div id="toast"></div>
 
+<!-- Modal: cadastro de lavador -->
+<div class="overlay" id="ov-lavador">
+  <div class="modal" style="max-width:360px">
+    <h3>👷 Novo lavador</h3>
+    <p class="sub">Digite o nome do lavador para cadastrar.</p>
+    <div class="field">
+      <label>Nome</label>
+      <input type="text" id="lavador-input" placeholder="Ex.: João Silva" autocomplete="off">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button class="btn ghost" style="flex:1" id="lavador-cancelar">Cancelar</button>
+      <button class="btn primary" style="flex:2" id="lavador-confirmar">Cadastrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: senha de administração -->
 <div class="overlay" id="ov-senha">
   <div class="modal" style="max-width:360px">
@@ -498,15 +517,16 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 /* Cache local em memória: o app lê daqui (rápido) e toda gravação
    vai para o Supabase e depois recarrega o cache. */
-const S = { veiculos: [], programacao: {}, lavagens: [] };
+const S = { veiculos: [], programacao: {}, lavagens: [], lavadores: [] };
 
 async function carregarTudo() {
-  const [v, p, l] = await Promise.all([
+  const [v, p, l, lav] = await Promise.all([
     sb.from('veiculos').select('*').order('placa'),
     sb.from('programacao').select('*'),
-    sb.from('lavagens').select('*')
+    sb.from('lavagens').select('*'),
+    sb.from('lavadores').select('*').order('nome')
   ]);
-  const erro = v.error || p.error || l.error;
+  const erro = v.error || p.error || l.error || lav.error;
   if (erro) throw erro;
 
   // Primeira vez: banco vazio → importa a frota da planilha
@@ -521,11 +541,12 @@ async function carregarTudo() {
   S.programacao = {};
   p.data.forEach(r => { (S.programacao[r.data] = S.programacao[r.data] || []).push(r.placa); });
   S.lavagens = l.data;
+  S.lavadores = lav.data;
   invalidarCacheDias();
 }
 
 function renderTudo() {
-  renderLavador(); renderAdminVeiculos(); renderProgramacao(); renderHistorico();
+  renderLavador(); renderAdminVeiculos(); renderProgramacao(); renderHistorico(); renderLavadores();
 }
 
 async function sincronizar() {       // recarrega do banco e redesenha
@@ -899,10 +920,24 @@ function abrirLavagem(placa) {
   document.getElementById('lav-data').value = brData(hoje);
   document.getElementById('lav-sub').textContent = v ? v.modelo : '';
   document.getElementById('lav-obs').value = '';
+  const sel = document.getElementById('lav-lavador');
+  sel.innerHTML = '<option value="">— selecione —</option>' +
+    S.lavadores.filter(l => l.ativo).map(l => `<option value="${esc(l.nome)}">${esc(l.nome)}</option>`).join('');
+  sel.value = '';
   renderThumbs();
   document.getElementById('ov-lavagem').classList.add('on');
 }
-document.getElementById('lav-cancelar').onclick = () => document.getElementById('ov-lavagem').classList.remove('on');
+document.getElementById('lav-lavador').addEventListener('change', renderThumbs);
+
+function fecharModalLavagem() {
+  const temFotos = Object.keys(fotosAtuais).length > 0;
+  if (temFotos && !confirm('Você tem fotos não salvas. Deseja sair sem confirmar a lavagem?')) return;
+  Object.values(fotosAtuais).forEach(f => { if (f?.dataUrl) URL.revokeObjectURL(f.dataUrl); });
+  fotosAtuais = {};
+  document.getElementById('ov-lavagem').classList.remove('on');
+}
+document.getElementById('lav-cancelar').onclick = fecharModalLavagem;
+document.getElementById('ov-lavagem').addEventListener('click', e => { if (e.target === e.currentTarget) fecharModalLavagem(); });
 
 
 /* Fotos por slot: externa, interior, baú — só câmera, sem galeria.
@@ -938,13 +973,14 @@ function renderThumbs() {
     }
   });
   const n = Object.keys(fotosAtuais).length;
+  const lavadorOk = !!document.getElementById('lav-lavador').value;
   const req = document.getElementById('lav-req');
-  const completo = n === 3;
-  req.className = 'req-note' + (completo ? ' ok' : '');
-  req.textContent = completo
+  const fotosOk = n === 3;
+  req.className = 'req-note' + (fotosOk ? ' ok' : '');
+  req.textContent = fotosOk
     ? '✅ As 3 fotos foram anexadas. Pode confirmar a lavagem.'
     : `⚠️ Anexe as 3 fotos obrigatórias para confirmar (${n}/3 anexada${n !== 1 ? 's' : ''}).`;
-  document.getElementById('lav-salvar').disabled = !completo;
+  document.getElementById('lav-salvar').disabled = !(fotosOk && lavadorOk);
 }
 function removerFoto(slot) {
   if (fotosAtuais[slot]?.dataUrl) URL.revokeObjectURL(fotosAtuais[slot].dataUrl);
@@ -972,9 +1008,11 @@ document.getElementById('lav-salvar').onclick = async () => {
     const ins = await sb.from('lavagens').insert({
       placa: placaAtual, data, hora,
       obs: document.getElementById('lav-obs').value.trim(),
-      lavador: '', fotos
+      lavador: document.getElementById('lav-lavador').value.trim(), fotos
     });
     if (ins.error) throw ins.error;
+    Object.values(fotosAtuais).forEach(f => { if (f?.dataUrl) URL.revokeObjectURL(f.dataUrl); });
+    fotosAtuais = {};
     document.getElementById('ov-lavagem').classList.remove('on');
     toast(`✅ Lavagem da placa ${placaAtual} registrada às ${hora}`);
     await sincronizar();
@@ -985,6 +1023,69 @@ document.getElementById('lav-salvar').onclick = async () => {
     btn.disabled = false; btn.textContent = '✓ Confirmar lavagem';
   }
 };
+
+/* ==================================================================
+   ADMIN — LAVADORES
+   ================================================================== */
+function renderLavadores() {
+  const lista = S.lavadores;
+  document.getElementById('lista-lavadores').innerHTML = lista.length
+    ? lista.map(l => `
+      <div class="vcard ${l.ativo ? '' : 'late'}">
+        <div class="info" style="flex:1">
+          <div class="model">👷 ${esc(l.nome)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="${l.ativo ? 'tag-active' : 'tag-inactive'}">${l.ativo ? 'Ativo' : 'Inativo'}</span>
+          <button class="btn ghost small" data-action="toggle-lavador" data-id="${l.id}" data-ativo="${l.ativo}">${l.ativo ? 'Desativar' : 'Ativar'}</button>
+          <button class="btn danger small" data-action="excluir-lavador" data-id="${l.id}" data-nome="${esc(l.nome)}">🗑️</button>
+        </div>
+      </div>`).join('')
+    : '<div class="empty"><div class="big">👷</div>Nenhum lavador cadastrado.</div>';
+}
+
+document.getElementById('btn-novo-lavador').onclick = () => {
+  document.getElementById('lavador-input').value = '';
+  document.getElementById('ov-lavador').classList.add('on');
+  setTimeout(() => document.getElementById('lavador-input').focus(), 100);
+};
+document.getElementById('lavador-cancelar').onclick = () => document.getElementById('ov-lavador').classList.remove('on');
+document.getElementById('lavador-confirmar').onclick = async () => {
+  const nomeTrim = document.getElementById('lavador-input').value.trim();
+  if (!nomeTrim) { toast('⚠️ Digite um nome'); return; }
+  if (S.lavadores.some(l => l.nome.toLowerCase() === nomeTrim.toLowerCase())) {
+    toast('⚠️ Já existe um lavador com esse nome'); return;
+  }
+  const r = await sb.from('lavadores').insert({ nome: nomeTrim, ativo: true });
+  if (r.error) { console.error(r.error); toast('⚠️ Erro ao cadastrar lavador'); return; }
+  document.getElementById('ov-lavador').classList.remove('on');
+  toast(`✅ Lavador "${nomeTrim}" cadastrado`);
+  await sincronizar();
+};
+document.getElementById('lavador-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('lavador-confirmar').click();
+});
+
+document.getElementById('lista-lavadores').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const { action, id, ativo, nome } = btn.dataset;
+
+  if (action === 'toggle-lavador') {
+    const novoAtivo = ativo === 'true' ? false : true;
+    const r = await sb.from('lavadores').update({ ativo: novoAtivo }).eq('id', id);
+    if (r.error) { console.error(r.error); toast('⚠️ Erro ao atualizar'); return; }
+    await sincronizar();
+  }
+
+  if (action === 'excluir-lavador') {
+    if (!confirm(`Excluir permanentemente o lavador "${nome}"?`)) return;
+    const r = await sb.from('lavadores').delete().eq('id', id);
+    if (r.error) { console.error(r.error); toast('⚠️ Erro ao excluir'); return; }
+    toast('Lavador excluído');
+    await sincronizar();
+  }
+});
 
 /* ==================================================================
    ADMIN — CADASTRO DE VEÍCULOS
@@ -1035,9 +1136,13 @@ function abrirVeiculo(placa) {
 /* Exclusão definitiva, acionada pelo link discreto dentro do modal */
 async function excluirVeiculoModal() {
   if (!placaEditando) return;
-  if (!confirm(`Excluir PERMANENTEMENTE o veículo ${placaEditando}?\n\nA programação dele também será removida. Esta ação não pode ser desfeita.\n\nDica: para manter o histórico, prefira marcar como "Inativo".`)) return;
-  const r = await sb.from('veiculos').delete().eq('placa', placaEditando);
-  if (r.error) { console.error(r.error); toast('⚠️ Erro ao excluir'); return; }
+  if (!confirm(`Excluir PERMANENTEMENTE o veículo ${placaEditando}?\n\nA programação e o histórico de lavagens dele também serão removidos. Esta ação não pode ser desfeita.\n\nDica: para manter o histórico, prefira marcar como "Inativo".`)) return;
+  const [rProg, rVei] = await Promise.all([
+    sb.from('programacao').delete().eq('placa', placaEditando),
+    sb.from('veiculos').delete().eq('placa', placaEditando)
+  ]);
+  const erro = rProg.error || rVei.error;
+  if (erro) { console.error(erro); toast('⚠️ Erro ao excluir'); return; }
   document.getElementById('ov-veiculo').classList.remove('on');
   toast('Veículo excluído');
   await sincronizar();
@@ -1326,15 +1431,6 @@ async function iniciar() {
 }
 document.getElementById('conn-retry').onclick = iniciar;
 iniciar();
-</script>
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js')
-      .then(() => console.log('SW registrado'))
-      .catch(e => console.warn('SW falhou:', e));
-  });
-}
 </script>
 </body>
 </html>
