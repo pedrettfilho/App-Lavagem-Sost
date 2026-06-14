@@ -191,6 +191,28 @@ h2.sec{font-size:14px;text-transform:uppercase;letter-spacing:.8px;color:var(--m
   cursor:pointer;white-space:nowrap;
 }
 .subtabs button.on{background:var(--petrol);border-color:var(--petrol);color:#fff}
+/* ---------- Resumo ---------- */
+.semana-bar{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;box-shadow:var(--shadow);margin-bottom:8px}
+.semana-bar .sb-header{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px}
+.semana-bar .sb-periodo{font-weight:700;display:flex;align-items:center;gap:7px}
+.semana-bar .sb-count{font-weight:800;color:var(--petrol)}
+.badge-atual{background:var(--aqua-soft);color:var(--petrol);font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px}
+.barra-track{background:var(--line);border-radius:99px;height:8px}
+.barra-fill{border-radius:99px;height:8px}
+.barra-fill.atual{background:var(--petrol)}
+.barra-fill.antiga{background:var(--aqua)}
+.pizza-wrap{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.pizza-legenda{display:flex;flex-direction:column;gap:8px;font-size:13px;padding:0}
+.pizza-legenda li{display:flex;align-items:center;gap:8px;list-style:none}
+.pizza-dot{width:13px;height:13px;border-radius:50%;flex-shrink:0}
+.grupo-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;box-shadow:var(--shadow);margin-bottom:8px}
+.grupo-card .gc-titulo{font-size:14px;font-weight:700;margin-bottom:8px}
+.gc-badges{display:flex;gap:7px;flex-wrap:wrap}
+.gc-badge{font-size:12px;font-weight:700;padding:4px 12px;border-radius:99px}
+.gc-badge.verde{background:#dcfce7;color:#14532d}
+.gc-badge.amarelo{background:#fef3c7;color:#78350f}
+.gc-badge.vermelho{background:#fee2e2;color:#7f1d1d}
+.gc-badge.sem{background:var(--paper);color:var(--muted);border:1px solid var(--line)}
 /* ---------- Tabela do histórico ---------- */
 .tablewrap{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
 table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px}
@@ -297,6 +319,7 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
       <button data-sub="programacao">📅 Programação</button>
       <button data-sub="historico">📋 Histórico</button>
       <button data-sub="lavadores">👷 Lavadores</button>
+      <button data-sub="resumo">📊 Resumo</button>
     </div>
 
     <!-- Cadastro de veículos -->
@@ -324,6 +347,21 @@ td .mini{width:38px;height:38px;border-radius:7px;object-fit:cover;border:1px so
     <div id="sub-lavadores" class="subview" style="display:none">
       <button class="btn primary block" id="btn-novo-lavador" style="margin-bottom:12px">＋ Adicionar lavador</button>
       <div id="lista-lavadores"></div>
+    </div>
+
+    <!-- Resumo -->
+    <div id="sub-resumo" class="subview" style="display:none">
+      <h2 class="sec">Lavagens por semana</h2>
+      <div id="resumo-semanas"></div>
+
+      <h2 class="sec" style="margin-top:18px">Status atual da frota</h2>
+      <div class="pizza-wrap">
+        <svg id="resumo-pizza" width="110" height="110" viewBox="0 0 36 36" style="flex-shrink:0"></svg>
+        <ul class="pizza-legenda" id="resumo-pizza-legenda"></ul>
+      </div>
+
+      <h2 class="sec" style="margin-top:18px">Resumo por grupo</h2>
+      <div id="resumo-grupos"></div>
     </div>
 
     <!-- Histórico -->
@@ -546,7 +584,7 @@ async function carregarTudo() {
 }
 
 function renderTudo() {
-  renderLavador(); renderAdminVeiculos(); renderProgramacao(); renderHistorico(); renderLavadores();
+  renderLavador(); renderAdminVeiculos(); renderProgramacao(); renderHistorico(); renderLavadores(); renderResumo();
 }
 
 async function sincronizar() {       // recarrega do banco e redesenha
@@ -1284,6 +1322,99 @@ document.getElementById('cal-salvar').onclick = async () => {
     btn.disabled = false; btn.textContent = '✓ Programar';
   }
 };
+
+/* ==================================================================
+   ADMIN — RESUMO DA FROTA
+   ================================================================== */
+function renderResumo() {
+  const hoje = hojeISO();
+  const ativos = S.veiculos.filter(v => v.ativo);
+
+  /* --- Seção 1: Últimas 4 semanas --- */
+  const semanas = [];
+  for (let i = 0; i < 4; i++) {
+    const fim = new Date(hoje);
+    fim.setDate(fim.getDate() - i * 7);
+    const ini = new Date(fim);
+    ini.setDate(ini.getDate() - 6);
+    const fimISO = fim.getFullYear() + '-' + String(fim.getMonth()+1).padStart(2,'0') + '-' + String(fim.getDate()).padStart(2,'0');
+    const iniISO = ini.getFullYear() + '-' + String(ini.getMonth()+1).padStart(2,'0') + '-' + String(ini.getDate()).padStart(2,'0');
+    const placasLavadas = new Set(S.lavagens.filter(l => l.data >= iniISO && l.data <= fimISO).map(l => l.placa));
+    semanas.push({ iniISO, fimISO, count: placasLavadas.size, atual: i === 0 });
+  }
+  const maxCount = Math.max(...semanas.map(s => s.count), 1);
+  document.getElementById('resumo-semanas').innerHTML = semanas.map(s => {
+    const pct = Math.round((s.count / maxCount) * 100);
+    const [,mi,di] = s.iniISO.split('-');
+    const [,mf,df] = s.fimISO.split('-');
+    const periodo = `${di}/${mi} – ${df}/${mf}`;
+    const badge = s.atual ? '<span class="badge-atual">atual</span>' : '';
+    return `<div class="semana-bar">
+      <div class="sb-header">
+        <span class="sb-periodo">${periodo} ${badge}</span>
+        <span class="sb-count">${s.count} carro${s.count !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="barra-track"><div class="barra-fill ${s.atual ? 'atual' : 'antiga'}" style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
+
+  /* --- Seção 2: Status por cor (pizza SVG) --- */
+  let verde = 0, amarelo = 0, vermelho = 0, semReg = 0;
+  ativos.forEach(v => {
+    const dias = diasDesdeUltimaLavagem(v.placa);
+    if (dias === null) semReg++;
+    else if (dias <= 5) verde++;
+    else if (dias <= 10) amarelo++;
+    else vermelho++;
+  });
+  const total = ativos.length || 1;
+  const fatias = [
+    { val: verde,    cor: '#22c55e', label: 'Verde',        desc: '≤ 5 dias' },
+    { val: amarelo,  cor: '#f59e0b', label: 'Amarelo',      desc: '6 a 10 dias' },
+    { val: vermelho, cor: '#ef4444', label: 'Vermelho',     desc: '> 10 dias' },
+    { val: semReg,   cor: '#d1d5db', label: 'Sem registro', desc: 'nunca lavado' },
+  ];
+  let offset = 0;
+  const pizza = fatias.map(f => {
+    const pct = (f.val / total) * 100;
+    const slice = `<circle r="15.9" cx="18" cy="18" fill="none" stroke="${f.cor}" stroke-width="5"
+      stroke-dasharray="${pct.toFixed(1)} ${(100 - pct).toFixed(1)}"
+      stroke-dashoffset="${(-offset).toFixed(1)}" />`;
+    offset += pct;
+    return slice;
+  }).join('');
+  document.getElementById('resumo-pizza').innerHTML = pizza;
+  document.getElementById('resumo-pizza-legenda').innerHTML = fatias.map(f =>
+    `<li><span class="pizza-dot" style="background:${f.cor}"></span>
+     <span><b>${f.val}</b> ${f.label} — ${f.desc}</span></li>`
+  ).join('');
+
+  /* --- Seção 3: Resumo por grupo --- */
+  const grupos = {};
+  ativos.forEach(v => {
+    const g = v.grupo || '—';
+    if (!grupos[g]) grupos[g] = { total: 0, verde: 0, amarelo: 0, vermelho: 0, sem: 0 };
+    grupos[g].total++;
+    const dias = diasDesdeUltimaLavagem(v.placa);
+    if (dias === null) grupos[g].sem++;
+    else if (dias <= 5) grupos[g].verde++;
+    else if (dias <= 10) grupos[g].amarelo++;
+    else grupos[g].vermelho++;
+  });
+  document.getElementById('resumo-grupos').innerHTML = Object.keys(grupos).sort().map(g => {
+    const d = grupos[g];
+    const badges = [
+      d.verde    ? `<span class="gc-badge verde">🟢 ${d.verde}</span>` : '',
+      d.amarelo  ? `<span class="gc-badge amarelo">🟡 ${d.amarelo}</span>` : '',
+      d.vermelho ? `<span class="gc-badge vermelho">🔴 ${d.vermelho}</span>` : '',
+      d.sem      ? `<span class="gc-badge sem">⚪ ${d.sem}</span>` : '',
+    ].join('');
+    return `<div class="grupo-card">
+      <div class="gc-titulo">🚚 ${esc(g)} <span style="font-weight:400;color:var(--muted);font-size:12px">· ${d.total} veículo${d.total !== 1 ? 's' : ''}</span></div>
+      <div class="gc-badges">${badges}</div>
+    </div>`;
+  }).join('');
+}
 
 /* ==================================================================
    ADMIN — HISTÓRICO DE LAVAGENS
