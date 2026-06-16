@@ -942,6 +942,95 @@ function renderLavador() {
   }).join('');
 }
 
+/* ==================================================================
+   RASCUNHO DE LAVAGEM — sobrevive ao reload do Android
+   Guarda a lavagem em andamento (placa, campos, fotos) em IndexedDB,
+   para que o app possa restaurá-la quando o Android matar o navegador
+   durante a captura de foto. Silencioso: se o IndexedDB falhar, o app
+   continua funcionando normalmente, só sem restauração.
+   ================================================================== */
+const draftStore = (() => {
+  const DB = 'lavagem', STORE = 'rascunho', KEY = 'atual';
+  function abrir() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function tx(modo, fn) {
+    return abrir().then(db => new Promise((resolve, reject) => {
+      const t = db.transaction(STORE, modo);
+      const req = fn(t.objectStore(STORE));
+      t.oncomplete = () => resolve(req && req.result);
+      t.onerror = () => reject(t.error);
+    }));
+  }
+  return {
+    salvar: obj => tx('readwrite', s => s.put(obj, KEY)),
+    ler:    ()  => tx('readonly',  s => s.get(KEY)),
+    limpar: ()  => tx('readwrite', s => s.delete(KEY)),
+  };
+})();
+
+/* Monta e grava o rascunho a partir do estado atual do modal.
+   Silencioso: qualquer falha de IndexedDB não atrapalha o uso. */
+async function salvarRascunho() {
+  if (!placaAtual) return;
+  try {
+    const fotos = {};
+    Object.keys(fotosAtuais).forEach(slot => {
+      const f = fotosAtuais[slot];
+      if (f?.blob) fotos[slot] = { nome: f.nome, blob: f.blob };
+    });
+    await draftStore.salvar({
+      placa: placaAtual,
+      lavador: document.getElementById('lav-lavador').value,
+      obs: document.getElementById('lav-obs').value,
+      fotos,
+      ts: Date.now()
+    });
+  } catch (e) { console.warn('salvarRascunho:', e); }
+}
+
+/* Apaga o rascunho salvo. Silencioso. */
+async function limparRascunho() {
+  try { await draftStore.limpar(); } catch (e) { console.warn('limparRascunho:', e); }
+}
+
+/* Restaura a lavagem em andamento após um reload (ex.: Android matou o
+   navegador na captura da câmera). Reabre o modal automaticamente com a
+   placa, os campos e as fotos. Descarta rascunhos com mais de 6 horas. */
+const RASCUNHO_MAX_MS = 6 * 60 * 60 * 1000; // 6 horas
+async function restaurarLavagem() {
+  let r;
+  try { r = await draftStore.ler(); } catch (e) { console.warn('lerRascunho:', e); return; }
+  if (!r || !r.placa) return;
+  if (Date.now() - (r.ts || 0) > RASCUNHO_MAX_MS) { await limparRascunho(); return; }
+
+  placaAtual = r.placa;
+  fotosAtuais = {};
+  Object.keys(r.fotos || {}).forEach(slot => {
+    try {
+      const f = r.fotos[slot];
+      fotosAtuais[slot] = { nome: f.nome, blob: f.blob, dataUrl: URL.createObjectURL(f.blob) };
+    } catch (e) { console.warn('restaurar foto', slot, e); }
+  });
+
+  const v = S.veiculos.find(x => x.placa === r.placa);
+  document.getElementById('lav-placa').value = r.placa;
+  document.getElementById('lav-data').value = brData(hojeISO());
+  document.getElementById('lav-sub').textContent = v ? v.modelo : '';
+  document.getElementById('lav-obs').value = r.obs || '';
+  const sel = document.getElementById('lav-lavador');
+  sel.innerHTML = '<option value="">— selecione —</option>' +
+    S.lavadores.filter(l => l.ativo).map(l => `<option value="${esc(l.nome)}">${esc(l.nome)}</option>`).join('');
+  sel.value = r.lavador || '';
+  renderThumbs();
+  document.getElementById('ov-lavagem').classList.add('on');
+}
+
 /* ---------- Modal de reporte ---------- */
 let fotosAtuais = {}; // { externa, interior, bau }
 let placaAtual = null;
@@ -966,12 +1055,15 @@ function abrirLavagem(placa) {
   document.getElementById('ov-lavagem').classList.add('on');
 }
 document.getElementById('lav-lavador').addEventListener('change', renderThumbs);
+document.getElementById('lav-lavador').addEventListener('change', salvarRascunho);
+document.getElementById('lav-obs').addEventListener('input', salvarRascunho);
 
 function fecharModalLavagem() {
   const temFotos = Object.keys(fotosAtuais).length > 0;
   if (temFotos && !confirm('Você tem fotos não salvas. Deseja sair sem confirmar a lavagem?')) return;
   Object.values(fotosAtuais).forEach(f => { if (f?.dataUrl) URL.revokeObjectURL(f.dataUrl); });
   fotosAtuais = {};
+  limparRascunho();
   document.getElementById('ov-lavagem').classList.remove('on');
 }
 document.getElementById('lav-cancelar').onclick = fecharModalLavagem;
@@ -993,6 +1085,7 @@ document.querySelectorAll('.foto-slot input[type=file]').forEach(inp => {
       foto.nome = SLOT_NOMES[slot];
       fotosAtuais[slot] = foto;
       renderThumbs();
+      salvarRascunho();
     } catch (err) { toast('⚠️ ' + (err.message || 'Não foi possível ler a imagem')); }
   };
 });
@@ -1023,6 +1116,7 @@ function renderThumbs() {
 function removerFoto(slot) {
   if (fotosAtuais[slot]?.dataUrl) URL.revokeObjectURL(fotosAtuais[slot].dataUrl);
   delete fotosAtuais[slot];
+  salvarRascunho();
   renderThumbs();
 }
 
@@ -1051,6 +1145,7 @@ document.getElementById('lav-salvar').onclick = async () => {
     if (ins.error) throw ins.error;
     Object.values(fotosAtuais).forEach(f => { if (f?.dataUrl) URL.revokeObjectURL(f.dataUrl); });
     fotosAtuais = {};
+    await limparRascunho();
     document.getElementById('ov-lavagem').classList.remove('on');
     toast(`✅ Lavagem da placa ${placaAtual} registrada às ${hora}`);
     await sincronizar();
@@ -1549,6 +1644,8 @@ async function iniciar() {
     await carregarTudo();
     renderTudo();
     document.getElementById('conn').style.display = 'none';
+    // Restaura uma lavagem em andamento, se o app foi recarregado no meio
+    try { await restaurarLavagem(); } catch(e) { console.warn('restaurarLavagem:', e); }
     // Verificação de pendentes roda APÓS o app já estar visível
     // Erro aqui nunca impede o carregamento
     try { await verificarPendentesOntem(); } catch(e) { console.warn('verificarPendentesOntem:', e); }
